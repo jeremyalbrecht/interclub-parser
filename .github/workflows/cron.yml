@@ -1,0 +1,20 @@
+name: Docker Image CI
+
+env:
+  BASE_URL: ${{ vars.BASE_URL }}
+  API_URL: ${{ vars.API_URL }}
+  API_TOKEN: ${{ secrets.API_TOKEN }}
+
+on:
+  schedule:
+    - cron: "0 19 * * 0,1"
+
+jobs:
+  build:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - run: python main.py
