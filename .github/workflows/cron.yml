@@ -1,4 +1,4 @@
-name: Docker Image CI
+name: Fetch and update leaderboard
 
 env:
   BASE_URL: ${{ vars.BASE_URL }}
