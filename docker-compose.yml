@@ -1,0 +1,9 @@
+version: "3.8"
+
+include:
+  - docker-compose/interclub-parser-runner.yml
+
+networks:
+  web:
+    external: true
+    name: traefik_web

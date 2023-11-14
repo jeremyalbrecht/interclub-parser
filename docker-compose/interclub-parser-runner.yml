@@ -1,0 +1,17 @@
+version: '2.3'
+services:
+  interclub-parser-worker:
+    container_name: interclub-parser-runner
+    image: myoung34/github-runner:latest
+    environment:
+      REPO_URL: https://github.com/jeremyalbrecht/interclub-parser
+      RUNNER_NAME: interclub-parser
+      ACCESS_TOKEN: $GITHUB_TOKEN
+      RUNNER_WORKDIR: /tmp/runner/interclub-parser-runner
+      RUNNER_SCOPE: 'repo'
+      LABELS: linux,x64
+    security_opt:
+      - label:disable
+    volumes:
+      - '/var/run/docker.sock:/var/run/docker.sock'
+      - '/tmp/runner:/tmp/runner'
