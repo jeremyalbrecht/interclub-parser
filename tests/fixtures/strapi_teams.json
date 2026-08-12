@@ -1,0 +1,50 @@
+{
+  "data": {
+    "teams": [
+      {
+        "id": 1,
+        "ranking": "D1",
+        "color": "#ff0000",
+        "major": true,
+        "icbad_id": "Comité 00 D1",
+        "group": "1",
+        "leaderboard": {
+          "competition_id": "https://icbad.ffbad.org/competition/9000003",
+          "rows": [
+            {"club": "Badminton Club Alpha (00-ALPHA-1)", "won": 8, "lost": 1, "total": 45}
+          ]
+        },
+        "season": {"name": "2025-2026", "default": true},
+        "images": []
+      },
+      {
+        "id": 2,
+        "ranking": "D2",
+        "color": "#00ff00",
+        "major": true,
+        "icbad_id": "Comité 00 D2",
+        "group": "1",
+        "leaderboard": {
+          "competition_id": "https://icbad.ffbad.org/competition/9000004",
+          "rows": []
+        },
+        "season": {"name": "2025-2026", "default": true},
+        "images": []
+      },
+      {
+        "id": 3,
+        "ranking": "D3",
+        "color": "#0000ff",
+        "major": false,
+        "icbad_id": "Comité 00 D3",
+        "group": "1",
+        "leaderboard": {
+          "competition_id": "https://icbad.ffbad.org/competition/9000005",
+          "rows": []
+        },
+        "season": {"name": "2025-2026", "default": true},
+        "images": []
+      }
+    ]
+  }
+}
