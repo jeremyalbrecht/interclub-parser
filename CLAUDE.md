@@ -32,7 +32,7 @@ Strapi CMS entry.
 `function/func.py` exposes `new()` returning an `InterclubUpdate`. The runtime calls:
 
 - `start(cfg)` — receives `os.environ.copy()` as a dict on ASGI lifespan
-  startup; reads `BASE_URL`/`API_URL`/`API_TOKEN`/`GITHUB_DISPATCH_TOKEN`.
+  startup; reads `API_URL`/`API_TOKEN`/`GITHUB_DISPATCH_TOKEN`.
 - `handle(scope, receive, send)` — a **raw ASGI handler**, not a convenience
   wrapper. It must `await send(...)` a `http.response.start` then a
   `http.response.body`. Every request runs the full pipeline unconditionally.
@@ -44,25 +44,24 @@ Strapi CMS entry.
 separate:
 
 - **Network I/O** (`_fetch_teams`, `_push_teams`, `_fetch_page`,
-  `_dispatch_rebuild`, `_resolve_competition`) — thin async methods on
-  `InterclubUpdate`, each doing exactly one HTTP call (or, for
-  `_resolve_competition`, chaining two: the season-switch page then the
-  league page). Easy to fake in tests via `FakeClient`.
+  `_dispatch_rebuild`) — thin async methods on `InterclubUpdate`, each
+  doing exactly one HTTP call. Easy to fake in tests via `FakeClient`.
 - **Pure logic** (module-level functions: `parse_group`, `parse_competition`,
-  `find_league_link`, `leaderboard_from_group`, `apply_leaderboard`,
-  `strip_ids`) — no I/O, take/return plain data, and are tested directly
-  without touching `InterclubUpdate` at all.
-- **Orchestration** (`_run`) — loops over major teams, calls the above, and
-  sorts each team into `updated` / `skipped` / `failed`.
+  `leaderboard_from_group`, `apply_leaderboard`, `strip_ids`) — no I/O,
+  take/return plain data, and are tested directly without touching
+  `InterclubUpdate` at all.
+- **Orchestration** (`_run`) — loops over major teams in the default
+  season, calls the above, and sorts each team into
+  `updated` / `skipped` / `failed`.
 
-`_run`'s loop, per major team:
+`_run`'s loop, per team that is `major` **and** whose `season.default` is
+true (past-season teams are left alone):
 
-1. `_resolve_competition` switches icbad.ffbad.org to the team's season
-   (`?switchSaison=<first year of "2025-2026">`), matches `icbad_id` against
-   the visible text of the page's `<a class="link">` elements (the site has
-   no stable per-team league id, only this text-matched link), and parses the
-   league page if found. Returns `None` if no link matched — that team is
-   `skipped`, not an error.
+1. The team's league URL is read straight from
+   `team["leaderboard"]["competition_id"]` — no season-switch page, no
+   text matching against the sidebar. A team with no stored URL is
+   `skipped`, not an error. `_fetch_page` + `parse_competition` turn the
+   HTML into a `Competition`.
 2. `apply_leaderboard` merges the parsed standings into a **working copy** of
    the team list (returned, not mutated) — it's a pure dict transform, not a
    network call, so a bad merge (`IndexError` from a `group` number that
@@ -96,10 +95,16 @@ separate:
   without earlier teams' updates being at risk from a later team's failure.
 - **Team matching is by `ranking` + `season.name`**, not by Strapi `id` — the
   Strapi payload is handled as plain dicts (no schema dataclasses), so a
-  missing key surfaces as a `KeyError`, caught per-team around
-  `_resolve_competition`/`apply_leaderboard` and recorded as `failed` rather
-  than aborting the run. Only a failure in `_fetch_teams` itself (e.g. Strapi
-  auth rejected) propagates up to `handle()`'s top-level try/except as a 500.
+  missing key surfaces as a `KeyError`, caught per-team around the fetch +
+  `apply_leaderboard` and recorded as `failed` rather than aborting the run.
+  Only a failure in `_fetch_teams` itself (e.g. Strapi auth rejected)
+  propagates up to `handle()`'s top-level try/except as a 500.
+- **The competition URL comes from Strapi, not from scraping the sidebar.**
+  Each team's `leaderboard.competition_id` is treated as the source of
+  truth; icbad.ffbad.org's season switcher and `<a class="link">` listing
+  are no longer walked. Keeping that URL current is Strapi's job (one-time
+  edit per team when a season rolls over), and the parser only looks at
+  teams in the Strapi `default` season.
 
 ### Environment variables
 

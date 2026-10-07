@@ -11,11 +11,11 @@ An HTTP request to the function triggers one full pass:
 1. **Fetch teams** — `GET` the Strapi `vie-du-club` entry with a deep
    `populate` of `teams`, `teams.leaderboard`, `teams.leaderboard.rows`,
    `teams.season` and `teams.images`.
-2. **Find the league** — for each team flagged `major`, switch icbad.ffbad.org
-   to the team's season (`?switchSaison=<first year>`) and find the
-   `<a class="link">` whose visible text contains the team's `icbad_id`
-   (e.g. `"Comité 00 D1"` matches `"Interclubs Comité 00 D1 - 2025/2026"`).
-   A team whose league link can't be found is skipped, not failed.
+2. **Scrape standings** — for each team flagged `major` whose
+   `season.default` is `true`, fetch the URL stored on the team at
+   `leaderboard.competition_id` and parse it. Teams from past (non-default)
+   seasons are left untouched. A team without a `competition_id` is
+   skipped, not failed.
 3. **Parse standings** — the league page has either a single table under a
    "Poule Unique" heading, or several `table.classement-poule` elements (one
    per pool). Team name, played/won/draw/lost, bonus, penalties and points
@@ -30,7 +30,7 @@ An HTTP request to the function triggers one full pass:
    API, so the public site picks up the new standings. Nothing is dispatched
    if there was nothing to update.
 
-A team whose league link can't be found is skipped; a team whose scrape
+A team with no stored `competition_id` is skipped; a team whose scrape
 succeeds but whose data doesn't line up with Strapi (e.g. a `group` number
 that doesn't match any parsed pool) is recorded as failed rather than
 aborting the whole run — earlier teams that already merged successfully are
@@ -48,7 +48,6 @@ Read in `start(cfg)`; configured via `func.yaml` `run.envs`.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `BASE_URL` | yes | icbad.ffbad.org base URL (season-switch entry point) |
 | `API_URL` | yes | Strapi `vie-du-club` entry endpoint |
 | `API_TOKEN` | yes | Strapi API bearer token |
 | `GITHUB_DISPATCH_TOKEN` | yes | GitHub PAT with `actions: write` on `jeremyalbrecht/csjbad`, used to dispatch the site rebuild |
@@ -76,15 +75,15 @@ curl -i -X POST localhost:8080/
 touches the network. The HTTP client is injected through a factory on
 `InterclubUpdate.__init__`, with the fake supplied by `tests/conftest.py`.
 
-`tests/fixtures/` holds real, trimmed pages captured from icbad.ffbad.org (the
-season/region link listing and both the single-pool and multi-pool standings
-layouts) plus a sample Strapi response, so the parsing tests are pinned
-against actual site markup rather than an idealised shape.
+`tests/fixtures/` holds real, trimmed pages captured from icbad.ffbad.org
+(both the single-pool and multi-pool standings layouts) plus a sample Strapi
+response, so the parsing tests are pinned against actual site markup rather
+than an idealised shape.
 
 ## Deployment
 
 ```bash
-func deploy --registry docker.io/jeremyalbrecht
+kn func deploy --image docker.io/jeremyalbrecht/interclub-parser:latest --push=false --remote=false --build=false
 ```
 
 CI builds and pushes the image on every push to `main` that touches

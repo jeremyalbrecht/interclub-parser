@@ -7,11 +7,11 @@ single request.
 
 Notes on the two systems this glues together:
 
-* icbad.ffbad.org's season selector is a query string (``?switchSaison=``)
-  keyed on the *first* year of the season (``"2025-2026"`` -> ``2025``), and
-  the league a team plays in is found by matching ``icbad_id`` against the
-  visible text of one of the page's many ``<a class="link">`` entries (e.g.
-  ``"Interclubs Comité 00 D1 - 2025/2026"``) rather than a stable id.
+* Only teams in the Strapi "default" (current) season are processed, and
+  each team's league page URL is taken straight from its stored
+  ``leaderboard.competition_id`` — no season switch, no link text matching
+  against icbad.ffbad.org's sidebar. The URL is treated as the source of
+  truth; keeping it current is Strapi's job, not the parser's.
 * A standings page has either one table under a "Poule Unique" heading, or
   several ``table.classement-poule`` elements (one per pool) with no
   guaranteed 1:1 pairing to their headings — the code that follows mirrors
@@ -30,7 +30,7 @@ Notes on the two systems this glues together:
 import json
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
 import httpx
 from bs4 import BeautifulSoup
@@ -140,16 +140,6 @@ def parse_competition(url, html) -> Competition:
     return Competition(url=url, name="", groups=groups)
 
 
-def find_league_link(html, region) -> Optional[str]:
-    """Href of the ``<a class="link">`` whose text contains ``region``
-    (case-insensitive substring), or None."""
-    soup = BeautifulSoup(html, "lxml")
-    for link in soup.find_all("a", class_="link"):
-        if region.lower() in link.get_text(" ", strip=True).lower():
-            return link.attrs["href"]
-    return None
-
-
 def leaderboard_from_group(competition_url, group: Group) -> dict:
     """Strapi's expected ``{"competition_id": ..., "rows": [...]}`` shape."""
     return {
@@ -207,12 +197,11 @@ class InterclubUpdate:
     # -- Knative lifecycle ---------------------------------------------
 
     def start(self, cfg):
-        self.base_url = cfg["BASE_URL"]
         self.api_url = cfg["API_URL"]
         self.api_token = cfg["API_TOKEN"]
         self.github_dispatch_token = cfg["GITHUB_DISPATCH_TOKEN"]
         self._initialized = True
-        logging.info("Interclub Update started for %s -> %s", self.base_url, self.api_url)
+        logging.info("Interclub Update started for %s", self.api_url)
 
     async def handle(self, scope, receive, send):
         try:
@@ -246,29 +235,30 @@ class InterclubUpdate:
             updated, skipped, failed = [], [], []
 
             for team in teams:
-                if not team.get("major"):
+                if not team.get("major") or not team.get("season", {}).get("default"):
                     continue
-                icbad_id = team["icbad_id"]
+                team_id = team.get("icbad_id") or team.get("ranking") or team.get("id")
+                competition_url = (team.get("leaderboard") or {}).get("competition_id")
 
-                try:
-                    competition = await self._resolve_competition(client, team)
-                except Exception:
-                    logging.exception("Failed to resolve the league page for %s", icbad_id)
-                    failed.append(icbad_id)
-                    continue
-                if competition is None:
-                    logging.warning("Did not find a league page for %s", icbad_id)
-                    skipped.append(icbad_id)
+                if not competition_url:
+                    logging.warning("No competition_id set for %s", team_id)
+                    skipped.append(team_id)
                     continue
 
                 try:
+                    competition_html = await self._fetch_page(client, competition_url)
+                    competition = parse_competition(competition_url, competition_html)
                     working = apply_leaderboard(working, team, competition)
                 except (IndexError, ValueError, KeyError):
-                    logging.exception("Failed to apply parsed standings for %s", icbad_id)
-                    failed.append(icbad_id)
+                    logging.exception("Failed to apply parsed standings for %s", team_id)
+                    failed.append(team_id)
+                    continue
+                except Exception:
+                    logging.exception("Failed to fetch/parse %s for %s", competition_url, team_id)
+                    failed.append(team_id)
                     continue
 
-                updated.append(icbad_id)
+                updated.append(team_id)
 
             # One request for every update, not one per team — the working
             # list already carries every successful team's leaderboard.
@@ -281,15 +271,6 @@ class InterclubUpdate:
                      "dispatched": dispatched}
         finally:
             await client.aclose()
-
-    async def _resolve_competition(self, client, team):
-        season_start = team["season"]["name"].split("-")[0]
-        listing_html = await self._fetch_page(client, self.base_url, params={"switchSaison": season_start})
-        href = find_league_link(listing_html, team["icbad_id"])
-        if href is None:
-            return None
-        competition_html = await self._fetch_page(client, href)
-        return parse_competition(href, competition_html)
 
     # -- network I/O — thin, single-purpose, easy to fake in tests ------
 

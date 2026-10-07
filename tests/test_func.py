@@ -15,7 +15,6 @@ from function.func import (
     GITHUB_DISPATCH_URL,
     InterclubUpdate,
     apply_leaderboard,
-    find_league_link,
     leaderboard_from_group,
     new,
     parse_competition,
@@ -23,7 +22,6 @@ from function.func import (
     strip_ids,
 )
 
-SAISON_SWITCH = fixture_text("saison_switch.html")
 POULE_UNIQUE = fixture_text("classement_poule_unique.html")
 POULE_MULTI = fixture_text("classement_poule_multi.html")
 STRAPI_TEAMS = fixture_json("strapi_teams.json")
@@ -33,7 +31,6 @@ COMPETITION_URL = "https://icbad.ffbad.org/competition/9000003"
 
 def make_updater(**kwargs):
     updater = InterclubUpdate(**kwargs)
-    updater.base_url = "https://icbad.ffbad.org/"
     updater.api_url = "https://api.example.org/api/vie-du-club"
     updater.api_token = "s3cret-token"
     updater.github_dispatch_token = "gh-pat"
@@ -75,13 +72,11 @@ def test_new_returns_an_instance_that_reports_not_ready_until_started():
 def test_start_reads_config():
     updater = InterclubUpdate()
     updater.start({
-        "BASE_URL": "https://icbad.ffbad.org/",
         "API_URL": "https://api.example.org/api/vie-du-club",
         "API_TOKEN": "s3cret-token",
         "GITHUB_DISPATCH_TOKEN": "gh-pat",
     })
 
-    assert updater.base_url == "https://icbad.ffbad.org/"
     assert updater.api_url == "https://api.example.org/api/vie-du-club"
     assert updater.api_token == "s3cret-token"
     assert updater.github_dispatch_token == "gh-pat"
@@ -91,7 +86,7 @@ def test_start_reads_config():
 def test_start_rejects_missing_required_config():
     updater = InterclubUpdate()
     with pytest.raises(KeyError):
-        updater.start({"BASE_URL": "https://icbad.ffbad.org/"})
+        updater.start({"API_URL": "https://api.example.org/api/vie-du-club"})
 
 
 @pytest.mark.asyncio
@@ -153,15 +148,6 @@ def test_parse_competition_handles_multiple_groups():
     assert len(competition.groups) == 2
     assert competition.groups[0].rows[0].team.name == "Badminton Club Eta 1 (00-ETA-1)"
     assert competition.groups[1].rows[0].team.name == "Badminton Club Delta 3 (00-DELTA-3)"
-
-
-def test_find_league_link_matches_case_insensitively():
-    assert find_league_link(SAISON_SWITCH, "comité 00 d1") == \
-        "https://icbad.ffbad.org/competition/9000003"
-
-
-def test_find_league_link_returns_none_when_no_link_matches():
-    assert find_league_link(SAISON_SWITCH, "Comité 999") is None
 
 
 def test_leaderboard_from_group_builds_the_strapi_shape():
@@ -284,43 +270,18 @@ async def test_dispatch_rebuild_returns_false_instead_of_raising_on_failure():
     assert await updater._dispatch_rebuild(client) is False
 
 
-@pytest.mark.asyncio
-async def test_resolve_competition_switches_season_and_parses_the_league_page():
-    updater = make_updater()
-    client = FakeClient(get_responses=[FakeResponse(text=SAISON_SWITCH), FakeResponse(text=POULE_UNIQUE)])
-    team = {"icbad_id": "Comité 00 D1", "season": {"name": "2025-2026"}}
-
-    competition = await updater._resolve_competition(client, team)
-
-    assert competition.url == COMPETITION_URL
-    assert client.get_calls[0]["params"] == {"switchSaison": "2025"}
-    assert client.get_calls[1]["url"] == COMPETITION_URL
-
-
-@pytest.mark.asyncio
-async def test_resolve_competition_returns_none_when_the_league_is_not_listed():
-    updater = make_updater()
-    client = FakeClient(get_responses=[FakeResponse(text=SAISON_SWITCH)])
-    team = {"icbad_id": "Comité 999", "season": {"name": "2025-2026"}}
-
-    assert await updater._resolve_competition(client, team) is None
-    assert len(client.get_calls) == 1  # no competition page fetched
-
-
 # --------------------------------------------------------------------------
 # End to end
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_run_updates_major_teams_in_a_single_put_and_dispatches_the_rebuild():
+async def test_run_fetches_each_team_competition_url_directly_and_puts_once():
     client = FakeClient(
         get_responses=[
             FakeResponse(json_body=STRAPI_TEAMS),  # _fetch_teams
-            FakeResponse(text=SAISON_SWITCH),        # D1 saison switch
-            FakeResponse(text=POULE_UNIQUE),          # D1 competition page
-            FakeResponse(text=SAISON_SWITCH),         # D2 saison switch
-            FakeResponse(text=POULE_MULTI),           # D2 competition page
+            FakeResponse(text=POULE_UNIQUE),        # D1 competition page
+            FakeResponse(text=POULE_MULTI),         # D2 competition page
         ],
         put_responses=[FakeResponse(status_code=200)],
         post_responses=[FakeResponse(status_code=204)],
@@ -333,6 +294,12 @@ async def test_run_updates_major_teams_in_a_single_put_and_dispatches_the_rebuil
         "updated": ["Comité 00 D1", "Comité 00 D2"], "skipped": [], "failed": [],
         "dispatched": True,
     }
+    # No season-switch call — competition URLs are read straight from Strapi.
+    assert [c["url"] for c in client.get_calls] == [
+        updater.api_url,
+        "https://icbad.ffbad.org/competition/9000003",
+        "https://icbad.ffbad.org/competition/9000004",
+    ]
     # One PUT for both updates, not one per team.
     assert len(client.put_calls) == 1
     pushed = client.put_calls[0]["json"]["data"]["teams"]
@@ -349,9 +316,7 @@ async def test_run_reports_a_failed_dispatch_without_failing_the_request():
     client = FakeClient(
         get_responses=[
             FakeResponse(json_body=STRAPI_TEAMS),
-            FakeResponse(text=SAISON_SWITCH),
             FakeResponse(text=POULE_UNIQUE),
-            FakeResponse(text=SAISON_SWITCH),
             FakeResponse(text=POULE_MULTI),
         ],
         put_responses=[FakeResponse(status_code=200)],
@@ -366,16 +331,52 @@ async def test_run_reports_a_failed_dispatch_without_failing_the_request():
 
 
 @pytest.mark.asyncio
-async def test_run_skips_a_team_whose_league_link_is_not_found():
-    teams = {"data": {"teams": [{**teams_fixture()[0], "icbad_id": "Comité 999"}]}}
+async def test_run_only_processes_teams_in_the_default_season():
+    # A team in a past season sits in the fixture; it must not generate any
+    # scrape, PUT or dispatch, and must not appear in any of the buckets.
+    teams = teams_fixture()
+    teams.append({
+        **copy.deepcopy(teams[0]),
+        "id": 99, "ranking": "D1", "icbad_id": "Comité 00 D1 - 2023/2024",
+        "season": {"name": "2023-2024", "default": False},
+    })
+    payload = {"data": {"teams": teams}}
     client = FakeClient(
-        get_responses=[FakeResponse(json_body=teams), FakeResponse(text=SAISON_SWITCH)],
+        get_responses=[
+            FakeResponse(json_body=payload),
+            FakeResponse(text=POULE_UNIQUE),
+            FakeResponse(text=POULE_MULTI),
+        ],
+        put_responses=[FakeResponse(status_code=200)],
+        post_responses=[FakeResponse(status_code=204)],
     )
     updater = make_updater(client_factory=lambda: client)
 
     result = await updater._run()
 
-    assert result == {"updated": [], "skipped": ["Comité 999"], "failed": [], "dispatched": False}
+    assert "Comité 00 D1 - 2023/2024" not in (
+        result["updated"] + result["skipped"] + result["failed"]
+    )
+    # Only two competition fetches (both default-season teams), plus the
+    # Strapi one.
+    assert len(client.get_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_run_skips_a_team_with_no_competition_url_set():
+    teams = teams_fixture()
+    d1 = next(t for t in teams if t["ranking"] == "D1")
+    d1["leaderboard"] = None
+    # Only D1 would otherwise be processed — drop D2 so no PUT fires.
+    teams = [t for t in teams if t["ranking"] != "D2"]
+    client = FakeClient(get_responses=[FakeResponse(json_body={"data": {"teams": teams}})])
+    updater = make_updater(client_factory=lambda: client)
+
+    result = await updater._run()
+
+    assert result == {
+        "updated": [], "skipped": ["Comité 00 D1"], "failed": [], "dispatched": False,
+    }
     assert client.put_calls == []
     assert client.post_calls == []
 
@@ -392,9 +393,7 @@ async def test_run_records_a_team_as_failed_without_aborting_the_others():
     client = FakeClient(
         get_responses=[
             FakeResponse(json_body=payload),
-            FakeResponse(text=SAISON_SWITCH),
             FakeResponse(text=POULE_UNIQUE),
-            FakeResponse(text=SAISON_SWITCH),
             FakeResponse(text=POULE_MULTI),
         ],
         put_responses=[FakeResponse(status_code=200)],
